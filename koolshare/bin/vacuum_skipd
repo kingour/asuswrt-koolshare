@@ -1,0 +1,56 @@
+#!/bin/bash
+
+source /koolshare/scripts/base.sh
+alias echo_date='echo 【$(TZ=UTC-8 date -R +%Y年%m月%d日\ %X)】'
+
+SKIPD_PATH=/jffs/db/log
+CHECK_SQL="select k,max(id),count(1) as cnt from log_1 group by k having cnt > 1"
+LAST_ID_TEMPLATE="select id from log_1 where k = '_prefix_' order by id desc limit 1"
+DELETE_TEMPLATE="delete from log_1 where k = '_prefix_' and id < _last_id_"
+
+get_last_id() {
+    local prefix=$1
+    local sql=$(echo "$LAST_ID_TEMPLATE" | sed "s/_prefix_/$prefix/g")
+    sqlite3 $SKIPD_PATH "$sql"
+}
+
+delete_logs() {
+    local prefix=$1
+    local last_id=$2
+    local sql=$(echo "$DELETE_TEMPLATE" | sed "s/_prefix_/$prefix/g" | sed "s/_last_id_/${last_id}/g")
+    echo_date "$sql"
+    sqlite3 $SKIPD_PATH "$sql"
+}
+
+loop_check_duplicate() {
+    echo_date "begin to loop check duplicate keys and remove them..."
+    sqlite3 $SKIPD_PATH "$CHECK_SQL" | while read line;do
+        local key=$(echo "$line" | awk -F'|' '{print $1}')
+        local max_id=$(echo "$line" | awk -F'|' '{print $2}')
+        delete_logs "$key" "$max_id"
+    done
+}
+
+vacuum_sqlite3() {
+    echo_date "vacuum db file"
+    sqlite3 $SKIPD_PATH "VACUUM"
+}
+
+backup_log() {
+    echo_date "Backup dbfile to /opt/tmp/backup"
+    backup_path="/opt/tmp/backup"
+    if [[ ! -d $backup_path ]];then
+        backup_path="/tmp"
+    fi
+    sqlite3 $SKIPD_PATH ".backup ${backup_path}/log.bak"
+}
+
+main() {
+    backup_log
+    loop_check_duplicate
+    vacuum_sqlite3
+}
+
+echo_date "Doing vacuum skipd sqlite log"
+main
+echo_date "Done."

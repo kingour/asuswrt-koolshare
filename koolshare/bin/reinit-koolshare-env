@@ -1,0 +1,50 @@
+#!/bin/bash
+
+USB_JFFS_SPEED_W=5
+
+add_bash() {
+    if [[ ! -f /tmp/profile ]];then
+        cat <<EOF >> /tmp/profile
+#!/bin/bash
+
+export TIME_STYLE=long-iso
+export TERM=xterm
+alias vim='vim -u /opt/.vimrc'
+alias ll='ls -Al -h --color=auto'
+alias wget='wget --no-check-certificate'
+
+color_my_prompt() {
+    local __user_and_host="\[\033[01;32m\]\u@\h"
+    local __cur_location="\[\033[01;34m\]\w"
+    local __git_branch_color="\[\033[31m\]"
+    local __git_branch="\$(git branch 2> /dev/null | grep -e ^* | sed -E  s/^\\\\\\\\\\*\ \(.+\)$/\(\\\\\\\\\\1\)\ /)"
+    local __prompt_tail="\[\033[35m\]$"
+    local __last_color="\[\033[00m\]"
+    export PS1="\$__user_and_host \$__cur_location \$__git_branch_color\$__git_branch\$__prompt_tail\$__last_color "
+}
+color_my_prompt
+EOF
+        chmod +x /tmp/profile
+    fi
+    if [[ -f /tmp/profile && -f /jffs/etc/profile && $(grep '/tmp/profile' /jffs/etc/profile | wc -l) -eq 0 ]];then
+        sed -i '/\/tmp\/profile/d' /jffs/etc/profile
+        echo "[ -f /tmp/profile ] && . /tmp/profile" >> /jffs/etc/profile
+    fi
+}
+
+unlock_extensions() {
+    sed -i 's/\tdetect_package/\t# detect_package/g' /koolshare/scripts/ks_tar_install.sh
+}
+
+unlimit_usb() {
+    # unlimit usb2jffs write speed 50MB/s to 10MB/s
+    sed -r -i "s/^(W_LIMIT)=(.*)$/\1=${USB_JFFS_SPEED_W}/g" /koolshare/scripts/usb2jffs_config.sh
+    sed -r -i "s/^(W_LIMIT)=(.*)$/\1=${USB_JFFS_SPEED_W}/g" /koolshare/scripts/swap_make.sh
+}
+
+main() {
+    add_bash
+    unlock_extensions
+    unlimit_usb
+}
+main
