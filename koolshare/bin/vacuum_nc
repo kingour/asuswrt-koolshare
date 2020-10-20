@@ -1,0 +1,40 @@
+#!/bin/bash
+
+source /koolshare/scripts/base.sh
+alias echo_date='echo 【$(TZ=UTC-8 date -R +%Y年%m月%d日\ %X)】'
+
+DB_PATH=/jffs/.sys/nc/nt_center.db
+DELETE_TEMPLATE="delete from nt_center where tstamp < _time_"
+
+delete_logs() {
+    local _time=$1
+    local sql=$(echo "$DELETE_TEMPLATE" | sed "s/_time_/${_time}/g")
+    echo_date "$sql"
+    sqlite3 $DB_PATH "$sql"
+}
+
+vacuum_sqlite3() {
+    echo_date "vacuum db file"
+    sqlite3 $DB_PATH "VACUUM"
+}
+
+backup_log() {
+    echo_date "Backup dbfile to /opt/tmp/backup"
+    backup_path="/opt/tmp/backup"
+    if [[ ! -d $backup_path ]];then
+        backup_path="/tmp"
+    fi
+    sqlite3 $DB_PATH ".backup ${backup_path}/nt_center.db.bak"
+}
+
+main() {
+    local _time=$(date +%s)
+    let _time=_time-86400*7
+    backup_log
+    delete_logs "$_time"
+    vacuum_sqlite3
+}
+
+echo_date "Doing vacuum db log"
+main
+echo_date "Done."
