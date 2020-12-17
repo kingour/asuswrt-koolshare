@@ -1,6 +1,7 @@
 #!/bin/bash
 
 USB_JFFS_SPEED_W=5
+UDPXY_URI="http://192.168.50.1:4022"
 
 add_bash() {
     if [[ ! -f /tmp/profile ]];then
@@ -12,6 +13,7 @@ export TERM=xterm
 alias vim='vim -u /opt/.vimrc'
 alias ll='ls -Al -h --color=auto'
 alias wget='wget --no-check-certificate'
+alias acme='/koolshare/acme/acme.sh --home /koolshare/acme'
 
 color_my_prompt() {
     local __user_and_host="\[\033[01;32m\]\u@\h"
@@ -26,7 +28,7 @@ color_my_prompt
 EOF
         chmod +x /tmp/profile
     fi
-    if [[ -f /tmp/profile && -f /jffs/etc/profile && $(grep '/tmp/profile' /jffs/etc/profile | wc -l) -eq 0 ]];then
+    if [[ -f /tmp/profile && -f /jffs/etc/profile && $(grep -c '/tmp/profile' /jffs/etc/profile) -eq 0 ]];then
         sed -i '/\/tmp\/profile/d' /jffs/etc/profile
         echo "[ -f /tmp/profile ] && . /tmp/profile" >> /jffs/etc/profile
     fi
@@ -42,9 +44,31 @@ unlimit_usb() {
     sed -r -i "s/^(W_LIMIT)=(.*)$/\1=${USB_JFFS_SPEED_W}/g" /koolshare/scripts/swap_make.sh
 }
 
+restart_apps() {
+    service restart_httpd
+    sleep 1
+    curl ${http://192.168.50.1:4022}/restart
+}
+
+upgrade_acme() {
+    if [ -f /koolshare/acme/acme.sh ];then
+        sh /koolshare/acme/acme.sh --home /koolshare/acme --upgrade --auto-upgrade 0
+    fi
+}
+
 main() {
     add_bash
     unlock_extensions
     unlimit_usb
+    restart_apps
 }
-main
+
+case $1 in
+    add_bash|unlock_extensions|unlimit_usb|restart_apps|upgrade_acme|main)
+        eval $1
+    ;;
+    *)
+        echo "Usage: $0 {add_bash|unlock_extensions|unlimit_usb|restart_apps|upgrade_acme}"
+        exit 0
+    ;;
+esac
