@@ -47,7 +47,7 @@ unlimit_usb() {
 restart_apps() {
     service restart_httpd
     sleep 1
-    curl ${http://192.168.50.1:4022}/restart
+    curl ${UDPXY_URI}/restart
 }
 
 upgrade_acme() {
