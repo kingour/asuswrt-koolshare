@@ -1,7 +1,13 @@
 #!/bin/bash
 
+
+alias echo_date='echo $(date +%Y年%m月%d日\ %X)'
+export KSROOT=/koolshare
+source $KSROOT/scripts/base.sh
+eval `dbus export swap_`
 USB_JFFS_SPEED_W=5
 UDPXY_URI="http://192.168.50.1:4022"
+SS_TA="/koolshare/ss/ssconfig.sh /koolshare/ss/rules/dnsmasq.postconf"
 
 add_bash() {
     if [[ ! -f /tmp/profile ]];then
@@ -44,10 +50,19 @@ unlimit_usb() {
     sed -r -i "s/^(W_LIMIT)=(.*)$/\1=${USB_JFFS_SPEED_W}/g" /koolshare/scripts/swap_make.sh
 }
 
+mod_aria2() {
+    sed -i "/ss\.txt/d" /koolshare/scripts/aria2_config.sh
+}
+
+clean_mem() {
+    logger "clean mem"
+    /bin/sync && echo 1 > /proc/sys/vm/drop_caches && sleep 1
+    #swapoff -e "$swap_auto_mount" && swapon -e "$swap_auto_mount"
+}
+
 restart_apps() {
-    service restart_httpd
-    sleep 1
-    curl ${UDPXY_URI}/restart
+    service restart_httpd && curl ${UDPXY_URI}/restart &&sleep 1
+    clean_mem
 }
 
 upgrade_acme() {
@@ -56,19 +71,37 @@ upgrade_acme() {
     fi
 }
 
+update_ss_dns_china_user() {
+    target=${1}
+    if [[ $(grep -n -A 1 'ss_dns_china_user' ${target} | grep -c 'kingour_custom') -eq 0 ]];then
+        line=$(grep -n -A 1 'ss_dns_china_user' ${target}  | grep -oE "^[0-9]+:" | grep -oE "[0-9]+")
+        sed -i "${line}a\       #kingour_custom" ${target}
+        let line=line+1
+        sed -i "${line}a\       if [[ \$(echo \$ss_dns_china_user | grep ':' | wc -l) -eq 1 ]];then CDN=\$(echo \$ss_dns_china_user|awk -F':' '{print \$1}');DNSC_PORT=\$(echo \$ss_dns_china_user|awk -F':' '{print \$2}');fi" ${target}
+    fi
+}
+
+custom_ss() {
+    for key in $SS_TA;do
+        update_ss_dns_china_user $key
+    done
+}
+
 main() {
     add_bash
     unlock_extensions
     unlimit_usb
+    mod_aria2
+    custom_ss
     restart_apps
 }
 
 case $1 in
-    add_bash|unlock_extensions|unlimit_usb|restart_apps|upgrade_acme|main)
+    add_bash|unlock_extensions|unlimit_usb|restart_apps|upgrade_acme|clean_mem|custom_ss|main)
         eval $1
     ;;
     *)
-        echo "Usage: $0 {add_bash|unlock_extensions|unlimit_usb|restart_apps|upgrade_acme}"
+        echo "Usage: $0 {main|add_bash|unlock_extensions|unlimit_usb|restart_apps|upgrade_acme|clean_mem|custom_ss}"
         exit 0
     ;;
 esac

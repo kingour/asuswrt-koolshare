@@ -5,14 +5,8 @@ alias echo_date='echo 【$(TZ=UTC-8 date -R +%Y年%m月%d日\ %X)】'
 
 SKIPD_PATH=/jffs/db/log
 CHECK_SQL="select k,max(id),count(1) as cnt from log_1 group by k having cnt > 1"
-LAST_ID_TEMPLATE="select id from log_1 where k = '_prefix_' order by id desc limit 1"
 DELETE_TEMPLATE="delete from log_1 where k = '_prefix_' and id < _last_id_"
-
-get_last_id() {
-    local prefix=$1
-    local sql=$(echo "$LAST_ID_TEMPLATE" | sed "s/_prefix_/$prefix/g")
-    sqlite3 $SKIPD_PATH "$sql"
-}
+NOT_IN=$(dbus listall | sort | awk -F'=' '{print "'\''"$1"'\''"}' | tr "\n" "," | sed "s/^/\(/g;s/,$/\)/g")
 
 delete_logs() {
     local prefix=$1
@@ -42,10 +36,17 @@ backup_log() {
     if [[ ! -d $backup_path ]];then
         backup_path="/tmp"
     fi
+    sqlite3 $SKIPD_PATH ".dump log_1" > ${backup_path}/log.sql
     sqlite3 $SKIPD_PATH ".backup ${backup_path}/log.bak"
 }
 
+show_diff() {
+    echo_date "List not in dbus keys:"
+    sqlite3 /jffs/db/log "select * from log_1 where k not in ${NOT_IN}"
+}
+
 main() {
+    show_diff
     backup_log
     loop_check_duplicate
     vacuum_sqlite3
