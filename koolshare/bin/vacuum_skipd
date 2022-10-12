@@ -1,11 +1,13 @@
 #!/bin/bash
+# shellcheck disable=SC2155
 
 source /koolshare/scripts/base.sh
 alias echo_date='echo 【$(TZ=UTC-8 date -R +%Y年%m月%d日\ %X)】'
 
-SKIPD_PATH=/jffs/db/log
-CHECK_SQL="select k,max(id),count(1) as cnt from log_1 group by k having cnt > 1"
-DELETE_TEMPLATE="delete from log_1 where k = '_prefix_' and id < _last_id_"
+SKIPD_PATH=/jffs/ksdb/log
+SKIPD_TABLE=log_2
+CHECK_SQL="select k,max(id),count(1) as cnt from $SKIPD_TABLE group by k having cnt > 1"
+DELETE_TEMPLATE="delete from $SKIPD_TABLE where k = '_prefix_' and id < _last_id_"
 NOT_IN=$(dbus listall | sort | awk -F'=' '{print "'\''"$1"'\''"}' | tr "\n" "," | sed "s/^/\(/g;s/,$/\)/g")
 
 delete_logs() {
@@ -18,7 +20,7 @@ delete_logs() {
 
 loop_check_duplicate() {
     echo_date "begin to loop check duplicate keys and remove them..."
-    sqlite3 $SKIPD_PATH "$CHECK_SQL" | while read line;do
+    sqlite3 $SKIPD_PATH "$CHECK_SQL" | while read -r line; do
         local key=$(echo "$line" | awk -F'|' '{print $1}')
         local max_id=$(echo "$line" | awk -F'|' '{print $2}')
         delete_logs "$key" "$max_id"
@@ -33,16 +35,16 @@ vacuum_sqlite3() {
 backup_log() {
     echo_date "Backup dbfile to /opt/tmp/backup"
     backup_path="/opt/tmp/backup"
-    if [[ ! -d $backup_path ]];then
+    if [[ ! -d $backup_path ]]; then
         backup_path="/tmp"
     fi
-    sqlite3 $SKIPD_PATH ".dump log_1" > ${backup_path}/log.sql
+    sqlite3 $SKIPD_PATH ".dump $SKIPD_TABLE" >${backup_path}/log.sql
     sqlite3 $SKIPD_PATH ".backup ${backup_path}/log.bak"
 }
 
 show_diff() {
     echo_date "List not in dbus keys:"
-    sqlite3 /jffs/db/log "select * from log_1 where k not in ${NOT_IN}"
+    sqlite3 $SKIPD_PATH "select * from $SKIPD_TABLE where k not in ${NOT_IN}"
 }
 
 main() {

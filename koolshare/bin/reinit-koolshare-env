@@ -1,17 +1,19 @@
 #!/bin/bash
 
-
 alias echo_date='echo $(date +%Y年%m月%d日\ %X)'
 export KSROOT=/koolshare
-source $KSROOT/scripts/base.sh
-eval `dbus export swap_`
+export KSROOT=$KSROOT/scripts
+source $KSROOT/base.sh
+eval $(dbus export swap_)
 USB_JFFS_SPEED_W=5
-UDPXY_URI="http://192.168.50.1:4022"
+UDPXY_URI="http://$(nvram get lan_ipaddr):$(nvram get udpxy_enable_x)"
 SS_TA="/koolshare/ss/ssconfig.sh /koolshare/ss/rules/dnsmasq.postconf"
+export SYS_LOG_FILE0=syslog.log
+export SYS_LOG_FILE1=syslog.log-1
 
 add_bash() {
-    if [[ ! -f /tmp/profile ]];then
-        cat <<EOF >> /tmp/profile
+    if [[ ! -f /tmp/profile ]]; then
+        cat <<EOF >>/tmp/profile
 #!/bin/bash
 
 export TIME_STYLE=long-iso
@@ -19,7 +21,8 @@ export TERM=xterm
 alias vim='vim -u /opt/.vimrc'
 alias ll='ls -Al -h --color=auto'
 alias wget='wget --no-check-certificate'
-alias acme='/koolshare/acme/acme.sh --home /koolshare/acme'
+alias acme.sh='/koolshare/acme/acme.sh --home /koolshare/acme'
+alias netcat='/opt/bin/nc'
 
 color_my_prompt() {
     local __user_and_host="\[\033[01;32m\]\u@\h"
@@ -34,9 +37,19 @@ color_my_prompt
 EOF
         chmod +x /tmp/profile
     fi
-    if [[ -f /tmp/profile && -f /jffs/etc/profile && $(grep -c '/tmp/profile' /jffs/etc/profile) -eq 0 ]];then
-        sed -i '/\/tmp\/profile/d' /jffs/etc/profile
-        echo "[ -f /tmp/profile ] && . /tmp/profile" >> /jffs/etc/profile
+    if [[ ! -f /opt/etc/profile ]]; then
+        cat >>/opt/etc/profile <<EOF
+#!/bin/bash
+
+export PATH=/koolshare/bin:\$PATH
+[ -f /tmp/profile ] && . /tmp/profile
+EOF
+        chmod +x /opt/etc/profile
+    else
+        if [[ -f /tmp/profile && $(grep -c 'color_my_prompt' /opt/etc/profile) -eq 0 ]]; then
+            sed -i '/\/tmp\/profile/d' /opt/etc/profile
+            echo "[ -f /tmp/profile ] && . /tmp/profile" >>/opt/etc/profile
+        fi
     fi
 }
 
@@ -55,26 +68,52 @@ mod_aria2() {
 }
 
 clean_mem() {
-    logger "clean mem"
-    /bin/sync && echo 1 > /proc/sys/vm/drop_caches && sleep 1
+    /bin/sync && echo 1 >/proc/sys/vm/drop_caches && sleep 1
     #swapoff -e "$swap_auto_mount" && swapon -e "$swap_auto_mount"
+    logger "[clean_mem] done"
 }
 
 restart_apps() {
-    service restart_httpd && curl ${UDPXY_URI}/restart &&sleep 1
+    service restart_httpd
     clean_mem
 }
 
+reload_networkmapd() {
+    mkdir -p /var/lock
+    {
+        /usr/bin/flock -n 110
+        if [[ $? -eq 1 ]]; then
+            logger "[reload_networkmapd] 上一个进程正在执行, sleep 5s"
+            sleep 5
+            rm -rf /var/lock/reload_networkmapd.lock
+            logger "[reload_networkmapd] kill all networkmap"
+            ps | grep -vE "reload_networkmapd|grep" | grep networkmap | awk '{print $1}' | xargs kill -9
+            sleep 5
+            logger "[reload_networkmapd] recall reload_networkmapd"
+            /koolshare/bin/reinit-koolshare-env reload_networkmapd
+            return 1
+        else
+            rescan=$(nvram get rescan_networkmap)
+            if [[ -n "$rescan" ]]; then
+                logger "[reload_networkmapd] 检测到networkmap僵死，开始重启networkmapd"
+                killall -q -9 networkmap
+                sleep 10
+                service start_networkmapd
+            fi
+        fi
+    } 110<>/var/lock/reload_networkmapd.lock
+}
+
 upgrade_acme() {
-    if [ -f /koolshare/acme/acme.sh ];then
+    if [ -f /koolshare/acme/acme.sh ]; then
         sh /koolshare/acme/acme.sh --home /koolshare/acme --upgrade --auto-upgrade 0
     fi
 }
 
 update_ss_dns_china_user() {
     target=${1}
-    if [[ $(grep -n -A 1 'ss_dns_china_user' ${target} | grep -c 'kingour_custom') -eq 0 ]];then
-        line=$(grep -n -A 1 'ss_dns_china_user' ${target}  | grep -oE "^[0-9]+:" | grep -oE "[0-9]+")
+    if [[ $(grep -n -A 1 'ss_dns_china_user' ${target} | grep -c 'kingour_custom') -eq 0 ]]; then
+        line=$(grep -n -A 1 'ss_dns_china_user' ${target} | grep -oE "^[0-9]+:" | grep -oE "[0-9]+")
         sed -i "${line}a\       #kingour_custom" ${target}
         let line=line+1
         sed -i "${line}a\       if [[ \$(echo \$ss_dns_china_user | grep ':' | wc -l) -eq 1 ]];then CDN=\$(echo \$ss_dns_china_user|awk -F':' '{print \$1}');DNSC_PORT=\$(echo \$ss_dns_china_user|awk -F':' '{print \$2}');fi" ${target}
@@ -82,26 +121,75 @@ update_ss_dns_china_user() {
 }
 
 custom_ss() {
-    for key in $SS_TA;do
+    for key in $SS_TA; do
         update_ss_dns_china_user $key
     done
 }
 
-main() {
+backup_conf() {
+    local _backup_dir="/tmp/backup"
+    mkdir -p ${_backup_dir}
+    local _backup_apps="ss aria2 acme aliddns frpc wifiboost usb2jffs swap pushplus"
+    for key in ${_backup_apps}; do
+        local _enable_key="${key}"
+        if [[ "$_enable_key" == "ss" ]]; then
+            _enable_key="ss_basic"
+        fi
+        dbus list ${key} | grep -vE "${_enable_key}_enable|_title|_version" | grep -vE "ssid_|last_act|record_id" | sed 's/=/=\"/' | sed 's/$/\"/g' | sed 's/^/dbus set /' | sed '1 isource /koolshare/scripts/base.sh' | sed '1 i#!/bin/sh' >${_backup_dir}/${key}_backup.sh
+    done
+    tar zcf /tmp/softcenter_conf.tar.gz -C ${_backup_dir} ./
+}
+
+stop_jffs_syslog() {
+    [[ ! -f /tmp/${SYS_LOG_FILE0} ]] && touch /tmp/${SYS_LOG_FILE0}
+    [[ ! -f /tmp/${SYS_LOG_FILE1} ]] && touch /tmp/${SYS_LOG_FILE1}
+    [[ ! -L /jffs/${SYS_LOG_FILE0} ]] && {
+        rm -rf /jffs/${SYS_LOG_FILE0}* && ln -sf /tmp/${SYS_LOG_FILE0} /jffs/${SYS_LOG_FILE0} &&
+            ln -sf /tmp/${SYS_LOG_FILE1} /jffs/${SYS_LOG_FILE1}
+    }
+}
+
+mod_pushplus() {
+    sed -i 's/grep "success"/jq .code | grep 200/g' /koolshare/scripts/pushplus_*.sh
+}
+
+mod_ss_rule_url() {
+    #https://raw.githubusercontent.com/hq450/fancyss/master/rules
+    sed -i 's/^\turl_main.*/\turl_main="https:\/\/raw.githubusercontent.com\/qxzg\/Actions\/master\/fancyss_rules"/g' /koolshare/scripts/ss_rule_update.sh
+}
+
+load_iptables_comment() {
+    cm=$(lsmod | grep xt_comment)
+    OS=$(uname -r)
+    if [ -z "$cm" ] && [ -f "/lib/modules/${OS}/kernel/net/netfilter/xt_comment.ko" ]; then
+        insmod /lib/modules/${OS}/kernel/net/netfilter/xt_comment.ko
+    fi
+}
+
+init() {
     add_bash
+    unlock_extensions
+    stop_jffs_syslog
+}
+
+custom() {
     unlock_extensions
     unlimit_usb
     mod_aria2
     custom_ss
-    restart_apps
+}
+
+main() {
+    init
+    custom
 }
 
 case $1 in
-    add_bash|unlock_extensions|unlimit_usb|restart_apps|upgrade_acme|clean_mem|custom_ss|main)
-        eval $1
+add_bash | unlock_extensions | unlimit_usb | restart_apps | upgrade_acme | clean_mem | custom_ss | main | backup_conf | stop_jffs_syslog | init | custom | reload_networkmapd | load_iptables_comment)
+    eval $1
     ;;
-    *)
-        echo "Usage: $0 {main|add_bash|unlock_extensions|unlimit_usb|restart_apps|upgrade_acme|clean_mem|custom_ss}"
-        exit 0
+*)
+    echo "Usage: $0 {main|add_bash|unlock_extensions|unlimit_usb|restart_apps|upgrade_acme|clean_mem|custom_ss|backup_conf|stop_jffs_syslog|init|custom|reload_networkmapd|load_iptables_comment}"
+    exit 0
     ;;
 esac
